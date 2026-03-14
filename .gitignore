@@ -1,0 +1,13 @@
+.venv/
+.matplotlib/
+__pycache__/
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.pyc
+*.pyo
+*.pyd
+*.DS_Store
+~$*.xlsx
+data/processed/eda/

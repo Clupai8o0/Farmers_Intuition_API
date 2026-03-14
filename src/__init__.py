@@ -1,0 +1,2 @@
+"""Irrigation recommendation MVP package."""
+
