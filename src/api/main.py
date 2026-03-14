@@ -1,8 +1,17 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException
+from datetime import datetime, timezone
+from typing import Any
 
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
+from src.api.chat import generate_response
 from src.api.schemas import (
+    ChatInput,
+    ChatOutput,
+    EnvironmentInput,
+    EnvironmentResponse,
     HealthResponse,
     PredictionRequest,
     PredictionResponse,
@@ -19,12 +28,114 @@ from src.ml.train import train_and_select_model
 
 app = FastAPI(
     title="Farmers Intuition Irrigation API",
-    version="0.1.0",
+    version="0.2.0",
     description=(
         "Production-minded MVP for baseline irrigation demand prediction and "
-        "recommendation using simulated Victorian farm history."
+        "recommendation using simulated Victorian farm history, with dashboard "
+        "integration and Gemini-powered voice assistant."
     ),
 )
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ---------------------------------------------------------------------------
+# In-memory environment state
+# ---------------------------------------------------------------------------
+_environment_state: dict[str, Any] = {}
+_previous_environment_state: dict[str, Any] = {}
+
+# Default parameters used to bridge dashboard inputs to the existing /recommend
+# model which expects full farm observation data.
+_DEMO_DEFAULTS: dict[str, Any] = {
+    "country": "Australia",
+    "state": "Victoria",
+    "farm_id": "FARM_YARRA_001",
+    "year": datetime.now(timezone.utc).year,
+    "quarter": f"Q{(datetime.now(timezone.utc).month - 1) // 3 + 1}",
+    "week": 1,
+    "nitrogen_weekly": 45.0,
+    "phosphorus_weekly": 18.0,
+    "potassium_weekly": 22.0,
+    "calcium_weekly": 10.0,
+    "magnesium_weekly": 7.0,
+    "sunlight_hours": 60.0,
+}
+
+
+def _check_alerts(
+    current: dict[str, Any], previous: dict[str, Any]
+) -> tuple[bool, list[str]]:
+    alerts: list[str] = []
+    if current.get("soil_moisture", 100) < 30:
+        alerts.append(
+            f"Soil moisture critically low at {current['soil_moisture']}%"
+        )
+    if current.get("temperature", 0) > 35:
+        alerts.append(
+            f"Heat stress risk \u2014 temperature at {current['temperature']}\u00b0C"
+        )
+    if (
+        current.get("humidity", 0) > 80
+        and current.get("temperature", 0) > 10
+        and current.get("rainfall", 0) > 2
+    ):
+        alerts.append(
+            "Downy mildew conditions detected \u2014 high humidity + warm temp + rainfall"
+        )
+    if current.get("soil_moisture", 0) > 85:
+        alerts.append(
+            f"Waterlogging risk \u2014 soil moisture at {current['soil_moisture']}%"
+        )
+    if previous and previous.get("predicted_daily_l"):
+        prev_daily = previous["predicted_daily_l"]
+        curr_daily = current.get("predicted_daily_l", prev_daily)
+        pct_change = abs(curr_daily - prev_daily) / max(prev_daily, 1)
+        if pct_change > 0.2:
+            alerts.append(
+                f"Irrigation need shifted significantly ({pct_change:.0%} change)"
+            )
+    return len(alerts) > 0, alerts
+
+
+def _build_recommend_input(env: EnvironmentInput) -> dict[str, Any]:
+    """Map dashboard environment values into the existing /recommend payload."""
+    return {
+        "Country": _DEMO_DEFAULTS["country"],
+        "State": _DEMO_DEFAULTS["state"],
+        "Region": env.region.replace("_", " ").title(),
+        "Farm_ID": _DEMO_DEFAULTS["farm_id"],
+        "Year": _DEMO_DEFAULTS["year"],
+        "Quarter": _DEMO_DEFAULTS["quarter"],
+        "Week": _DEMO_DEFAULTS["week"],
+        "Nitrogen_Weekly": _DEMO_DEFAULTS["nitrogen_weekly"],
+        "Phosphorus_Weekly": _DEMO_DEFAULTS["phosphorus_weekly"],
+        "Potassium_Weekly": _DEMO_DEFAULTS["potassium_weekly"],
+        "Calcium_Weekly": _DEMO_DEFAULTS["calcium_weekly"],
+        "Magnesium_Weekly": _DEMO_DEFAULTS["magnesium_weekly"],
+        "Temperature_Avg_C": env.temperature,
+        "Sunlight_Hours": _DEMO_DEFAULTS["sunlight_hours"],
+        "Humidity_Percent": env.humidity,
+        "land_area_ha": None,
+        "crop_type": env.variety,
+        "growth_stage": env.growth_stage,
+        "rainfall_mm": env.rainfall,
+        "soil_moisture_percent": env.soil_moisture,
+    }
+
+
+def get_current_environment() -> dict[str, Any]:
+    return _environment_state.copy()
+
+
+# ---------------------------------------------------------------------------
+# Original endpoints
+# ---------------------------------------------------------------------------
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -80,3 +191,87 @@ def retrain(request: RetrainRequest) -> RetrainResponse:
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Retraining failed: {exc}") from exc
 
+
+# ---------------------------------------------------------------------------
+# Piece 1: Environment state manager
+# ---------------------------------------------------------------------------
+
+
+@app.post("/environment", response_model=EnvironmentResponse)
+def post_environment(env: EnvironmentInput) -> EnvironmentResponse:
+    global _environment_state, _previous_environment_state
+
+    try:
+        artifact = load_model_artifact()
+        recommend_input = _build_recommend_input(env)
+        recommendation = recommend_water(recommend_input, artifact=artifact)
+    except ModelArtifactNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500, detail=f"Environment processing failed: {exc}"
+        ) from exc
+
+    _previous_environment_state = _environment_state.copy()
+
+    _environment_state = {
+        "temperature": env.temperature,
+        "humidity": env.humidity,
+        "soil_moisture": env.soil_moisture,
+        "rainfall": env.rainfall,
+        "wind_speed": env.wind_speed,
+        "growth_stage": env.growth_stage,
+        "variety": env.variety,
+        "region": env.region,
+        "predicted_daily_l": recommendation["recommended_daily_l"],
+        "predicted_weekly_l": recommendation["recommended_weekly_l"],
+        "confidence_level": recommendation["confidence_level"],
+        "warnings": recommendation["warnings"],
+        "assumptions": recommendation["assumptions"],
+        "model_name": recommendation["model_name"],
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    should_alert, alerts = _check_alerts(
+        _environment_state, _previous_environment_state
+    )
+    _environment_state["should_alert"] = should_alert
+    _environment_state["alerts"] = alerts
+
+    return EnvironmentResponse(
+        status="ok",
+        recommendation=recommendation,
+        should_alert=should_alert,
+        alerts=alerts,
+        environment=_environment_state,
+    )
+
+
+@app.get("/environment")
+def get_environment() -> dict[str, Any]:
+    if not _environment_state:
+        return {"status": "no_data", "message": "No sensor data received yet."}
+    return {"status": "ok", "environment": _environment_state}
+
+
+# ---------------------------------------------------------------------------
+# Piece 2: Gemini LLM chat endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.post("/chat", response_model=ChatOutput)
+async def chat(data: ChatInput) -> ChatOutput:
+    env = get_current_environment()
+    if not env:
+        return ChatOutput(
+            response="No sensor data available yet.",
+            is_alert=False,
+            environment={},
+        )
+
+    text = await generate_response(data.message, env)
+    return ChatOutput(
+        response=text,
+        is_alert=env.get("should_alert", False),
+        environment=env,
+    )
