@@ -3,15 +3,15 @@
   "selected_model_metrics": {
     "model_name": "gradient_boosting",
     "holdout_rmse": 16983.512519315704,
-    "holdout_mae": 13288.600420410181,
+    "holdout_mae": 13288.600420410177,
     "holdout_r2": 0.9685751962720588,
     "holdout_mape": 2.563423857149696,
-    "walk_forward_rmse": 17315.81297167112,
-    "walk_forward_mae": 13741.2261694029,
+    "walk_forward_rmse": 17315.812971671123,
+    "walk_forward_mae": 13741.226169402898,
     "walk_forward_r2": 0.9664086304171913,
     "walk_forward_mape": 2.6746829084681267,
     "selection_score": 9.0
   },
-  "trained_at_utc": "2026-03-14T13:59:56.582259+00:00",
+  "trained_at_utc": "2026-03-14T18:39:13.038645+00:00",
   "dataset_row_count": 780
 }

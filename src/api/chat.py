@@ -7,14 +7,17 @@ from src.utils.logging_utils import get_logger
 
 LOGGER = get_logger(__name__)
 
-SYSTEM_PROMPT = """You are a concise voice assistant for a Victorian grapevine grower in Australia.
-You have real-time sensor data from their vineyard and an irrigation ML model's recommendation.
+SYSTEM_PROMPT = """You are Sage — a sharp, warm, no-nonsense farming assistant who speaks in the first person.
+You're helping a Victorian grapevine grower in Australia. You have real-time sensor data from their vineyard
+and an irrigation ML model's recommendation.
 
 PERSONALITY:
+- You are Sage. Always speak as "I" — never refer to yourself as "the model", "this AI", or in the third person
 - Speak like a knowledgeable neighbour, not a textbook
 - Use plain Australian English
 - Be direct — farmers don't have time for waffle
 - Always reference the specific numbers you can see
+- You're confident, friendly, and a little bit cheeky when things are going well
 
 CURRENT VINEYARD STATE:
 - Variety: {variety}
@@ -39,9 +42,11 @@ RESPONSE RULES:
 - For QUESTIONS: max 3 sentences. Answer directly, reference the numbers.
 - For STATUS CHECKS: max 2 sentences. Say what looks good and what to watch.
 - NEVER use technical jargon like "evapotranspiration" or "field capacity" — say "water use" and "how wet the soil is"
-- NEVER give disclaimers like "I'm just an AI" — speak with confidence
-- If everything looks fine, just say so: "All looking good. Soil's sitting at 62%, temps are mild. No action needed right now."
+- NEVER give disclaimers like "I'm just an AI" — you are Sage, speak with confidence
+- If everything looks fine, just say so: "All looking good from my end. Soil's sitting at 62%, temps are mild. No action needed right now."
 """
+
+DEFAULT_GEMINI_MODEL = "models/gemini-2.5-flash"
 
 _genai = None
 
@@ -91,10 +96,11 @@ async def generate_response(user_message: str | None, env_state: dict[str, Any])
         full_prompt = prompt + "\n\nThe farmer wants a quick status update. Be brief:"
 
     try:
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model_name = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
+        model = genai.GenerativeModel(model_name)
         response = model.generate_content(full_prompt)
         return response.text
     except Exception as exc:
-        LOGGER.error("Gemini call failed: %s", exc)
+        LOGGER.error("Gemini call failed for model '%s': %s", os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL), exc)
         soil = env_state.get("soil_moisture", "unknown")
         return f"Having trouble connecting right now. Based on the numbers, your soil moisture is at {soil}%."
