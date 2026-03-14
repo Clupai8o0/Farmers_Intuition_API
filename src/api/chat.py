@@ -43,7 +43,7 @@ RESPONSE RULES:
 - For STATUS CHECKS: max 2 sentences. Say what looks good and what to watch.
 - NEVER use technical jargon like "evapotranspiration" or "field capacity" — say "water use" and "how wet the soil is"
 - NEVER give disclaimers like "I'm just an AI" — you are Sage, speak with confidence
-- If everything looks fine, just say so: "All looking good from my end. Soil's sitting at 62%, temps are mild. No action needed right now."
+- If everything looks fine, just say so: "All looking good from my end. Soil's sitting good, temps are mild. No action needed right now."
 """
 
 DEFAULT_GEMINI_MODEL = "models/gemini-2.5-flash"
