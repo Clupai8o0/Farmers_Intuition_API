@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import time
+import uuid
 from typing import Any
 
 from src.utils.logging_utils import get_logger
@@ -50,6 +52,18 @@ DEFAULT_GEMINI_MODEL = "models/gemini-2.5-flash"
 
 _genai = None
 
+# ---------------------------------------------------------------------------
+# In-memory session store
+# ---------------------------------------------------------------------------
+# Each session stores: {"history": [...], "last_active": float}
+_sessions: dict[str, dict[str, Any]] = {}
+
+# Sessions expire after 30 minutes of inactivity
+SESSION_TTL_SECONDS = 30 * 60
+
+# Max messages kept per session (older ones are trimmed)
+MAX_HISTORY_LENGTH = 20
+
 
 def _get_genai():
     global _genai
@@ -64,15 +78,44 @@ def _get_genai():
     return _genai
 
 
-async def generate_response(user_message: str | None, env_state: dict[str, Any]) -> str:
-    genai = _get_genai()
+def _cleanup_expired_sessions() -> None:
+    """Remove sessions that have been idle longer than SESSION_TTL_SECONDS."""
+    now = time.time()
+    expired = [
+        sid for sid, s in _sessions.items()
+        if now - s["last_active"] > SESSION_TTL_SECONDS
+    ]
+    for sid in expired:
+        del _sessions[sid]
 
+
+def create_session() -> str:
+    """Create a new conversation session and return its ID."""
+    _cleanup_expired_sessions()
+    session_id = uuid.uuid4().hex[:12]
+    _sessions[session_id] = {"history": [], "last_active": time.time()}
+    return session_id
+
+
+def get_session(session_id: str) -> dict[str, Any] | None:
+    """Return a session by ID, or None if it doesn't exist / has expired."""
+    _cleanup_expired_sessions()
+    session = _sessions.get(session_id)
+    if session is not None:
+        session["last_active"] = time.time()
+    return session
+
+
+def _build_system_prompt(env_state: dict[str, Any]) -> str:
+    """Build the system prompt with current environment data."""
     if env_state.get("alerts"):
-        alert_context = "ACTIVE ALERTS:\n" + "\n".join(f"- {a}" for a in env_state["alerts"])
+        alert_context = "ACTIVE ALERTS:\n" + "\n".join(
+            f"- {a}" for a in env_state["alerts"]
+        )
     else:
         alert_context = "No active alerts."
 
-    prompt = SYSTEM_PROMPT.format(
+    return SYSTEM_PROMPT.format(
         variety=env_state.get("variety", "unknown"),
         region=env_state.get("region", "unknown"),
         growth_stage=env_state.get("growth_stage", "unknown"),
@@ -88,19 +131,72 @@ async def generate_response(user_message: str | None, env_state: dict[str, Any])
         alert_context=alert_context,
     )
 
+
+def _determine_user_prompt(
+    user_message: str | None, env_state: dict[str, Any]
+) -> str:
+    """Determine what to send as the user turn."""
     if user_message:
-        full_prompt = prompt + f'\n\nThe farmer just asked: "{user_message}"\nRespond concisely:'
+        return user_message
     elif env_state.get("should_alert"):
-        full_prompt = prompt + "\n\nConditions just changed and triggered an alert. Warn the farmer concisely:"
+        return "Conditions just changed and triggered an alert. Warn me concisely."
     else:
-        full_prompt = prompt + "\n\nThe farmer wants a quick status update. Be brief:"
+        return "Give me a quick status update."
+
+
+async def generate_response(
+    user_message: str | None,
+    env_state: dict[str, Any],
+    session_id: str | None = None,
+) -> tuple[str, str]:
+    """Generate a response from Sage, maintaining conversation history.
+
+    Returns:
+        (response_text, session_id)
+    """
+    genai = _get_genai()
+
+    # Resolve or create session
+    session = None
+    if session_id:
+        session = get_session(session_id)
+    if session is None:
+        session_id = create_session()
+        session = _sessions[session_id]
+
+    system_prompt = _build_system_prompt(env_state)
+    user_prompt = _determine_user_prompt(user_message, env_state)
+
+    # Build the Gemini chat history from stored messages
+    history = list(session["history"])  # shallow copy
 
     try:
         model_name = os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL)
-        model = genai.GenerativeModel(model_name)
-        response = model.generate_content(full_prompt)
-        return response.text
+        model = genai.GenerativeModel(
+            model_name, system_instruction=system_prompt
+        )
+        chat = model.start_chat(history=history)
+        response = chat.send_message(user_prompt)
+        reply = response.text
+
+        # Store the new exchange in session history
+        session["history"].append({"role": "user", "parts": [user_prompt]})
+        session["history"].append({"role": "model", "parts": [reply]})
+
+        # Trim history if it exceeds the limit (keep most recent messages)
+        if len(session["history"]) > MAX_HISTORY_LENGTH:
+            session["history"] = session["history"][-MAX_HISTORY_LENGTH:]
+
+        return reply, session_id
+
     except Exception as exc:
-        LOGGER.error("Gemini call failed for model '%s': %s", os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL), exc)
+        LOGGER.error(
+            "Gemini call failed for model '%s': %s",
+            os.getenv("GEMINI_MODEL", DEFAULT_GEMINI_MODEL),
+            exc,
+        )
         soil = env_state.get("soil_moisture", "unknown")
-        return f"Having trouble connecting right now. Based on the numbers, your soil moisture is at {soil}%."
+        return (
+            f"Having trouble connecting right now. Based on the numbers, your soil moisture is at {soil}%.",
+            session_id,
+        )
