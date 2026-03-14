@@ -163,3 +163,40 @@ class HealthResponse(BaseModel):
     model_loaded: bool
     model_path: str
 
+
+class EnvironmentInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    temperature: float = Field(ge=0, le=50)
+    humidity: float = Field(ge=0, le=100)
+    soil_moisture: float = Field(ge=0, le=100)
+    rainfall: float = Field(ge=0, le=100)
+    wind_speed: float = Field(ge=0, le=150)
+    growth_stage: str = "veraison"
+    variety: str = "shiraz"
+    region: str = "yarra_valley"
+
+
+class EnvironmentResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: str
+    recommendation: dict[str, Any]
+    should_alert: bool
+    alerts: list[str]
+    environment: dict[str, Any]
+
+
+class ChatInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    message: Optional[str] = None
+
+
+class ChatOutput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    response: str
+    is_alert: bool
+    environment: dict[str, Any]
+

@@ -9,4 +9,5 @@ matplotlib
 pytest
 openpyxl
 httpx
+google-generativeai
 
