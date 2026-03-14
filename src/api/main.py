@@ -195,6 +195,25 @@ def debug() -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+@app.get("/model-info")
+def model_info() -> dict[str, Any]:
+    """Return metadata about the trained model artifact."""
+    if not MODEL_ARTIFACT_PATH.exists():
+        raise HTTPException(status_code=503, detail="No model artifact found. Run /retrain first.")
+
+    from src.ml.predict import load_model_artifact
+
+    artifact = load_model_artifact()
+    return {
+        "model_name": artifact.get("model_name"),
+        "trained_at_utc": artifact.get("trained_at_utc"),
+        "dataset_row_count": artifact.get("dataset_row_count"),
+        "selected_model_metrics": artifact.get("selected_model_metrics"),
+        "comparison_table": artifact.get("comparison_table"),
+        "limitations": artifact.get("limitations", []),
+    }
+
+
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
     model_loaded = MODEL_ARTIFACT_PATH.exists()
