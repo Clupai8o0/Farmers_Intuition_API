@@ -191,12 +191,17 @@ class ChatInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     message: Optional[str] = None
+    session_id: Optional[str] = Field(
+        default=None,
+        description="Session ID for conversation continuity. Omit to start a new conversation.",
+    )
 
 
 class ChatOutput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     response: str
+    session_id: str = Field(description="Session ID to send back in subsequent requests.")
     is_alert: bool
     environment: dict[str, Any]
 

@@ -319,7 +319,8 @@ async def chat(data: ChatInput) -> ChatOutput:
     env = get_current_environment()
     if not env:
         return ChatOutput(
-            response="No sensor data available yet.",
+            response="No sensor data available yet. Send environment data first.",
+            session_id="",
             is_alert=False,
             environment={},
         )
@@ -327,12 +328,16 @@ async def chat(data: ChatInput) -> ChatOutput:
     try:
         from src.api.chat import generate_response
 
-        text = await generate_response(data.message, env)
+        text, session_id = await generate_response(
+            data.message, env, session_id=data.session_id
+        )
     except Exception as exc:
         text = f"Voice assistant unavailable: {exc}"
+        session_id = data.session_id or ""
 
     return ChatOutput(
         response=text,
+        session_id=session_id,
         is_alert=env.get("should_alert", False),
         environment=env,
     )
